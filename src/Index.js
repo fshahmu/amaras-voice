@@ -1,4 +1,4 @@
-// Amara voice backend — staged for review, not deployed.
+// Amara voice backend and protected test frontend.
 // Cloudflare Access must protect this Worker before enabling paid sessions.
 // Access JWT verification below is defense in depth, not a replacement for Access policy.
 const json = (message, status, headers = {}) =>
@@ -45,11 +45,15 @@ async function verifyAccessJWT(token, teamDomain, audience) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/") return new Response("Amara voice service is ready.");
-    if (url.pathname !== "/session") return json("Not found", 404);
+    if (url.pathname === "/health") return new Response("Amara voice service is ready.");
+    const isStatus = url.pathname === "/api/voice-status";
+    if (url.pathname !== "/session" && !isStatus) {
+      return env.ASSETS ? env.ASSETS.fetch(request) : json("Not found", 404);
+    }
     const origin = request.headers.get("Origin");
-    const allowed = !!env.ALLOWED_ORIGIN && origin === env.ALLOWED_ORIGIN;
-    const cors = allowed ? {
+    const allowed = origin === url.origin || (!!env.ALLOWED_ORIGIN && origin === env.ALLOWED_ORIGIN) ||
+      (isStatus && request.method === "GET" && !origin);
+    const cors = allowed && origin ? {
       "Access-Control-Allow-Origin": origin,
       "Access-Control-Allow-Credentials": "true",
       "Access-Control-Allow-Headers": "Content-Type",
@@ -58,7 +62,7 @@ export default {
     } : {};
     if (!allowed) return json("Forbidden", 403);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-    if (request.method !== "POST") return json("Method not allowed", 405, cors);
+    if (request.method !== (isStatus ? "GET" : "POST")) return json("Method not allowed", 405, cors);
     if (!env.OPENAI_API_KEY || !env.CF_ACCESS_AUD || !env.CF_ACCESS_TEAM_DOMAIN || !env.AMARA_RATE_LIMITER)
       return json("Service not configured", 503, cors);
     // Only accept Access's trusted edge-injected assertion, never a browser-supplied bearer secret.
@@ -66,6 +70,7 @@ export default {
       request.headers.get("Cf-Access-Jwt-Assertion"),
       env.CF_ACCESS_TEAM_DOMAIN, env.CF_ACCESS_AUD);
     if (!identity) return json("Unauthorized", 401, cors);
+    if (isStatus) return Response.json({ ready: true }, { headers: { "Cache-Control": "no-store", ...cors } });
     // Rate limit before any paid OpenAI session is created.
     try {
       const limiter = await env.AMARA_RATE_LIMITER.limit({ key: identity });
@@ -79,10 +84,12 @@ export default {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
+          expires_after: { anchor: "created_at", seconds: 60 },
           session: {
             type: "realtime",
             model: "gpt-realtime",
             audio: { output: { voice: "shimmer" } },
+            max_output_tokens: 512,
             instructions: "You are Amara, a warm, thoughtful AI voice companion. Speak naturally, gently and conversationally. Keep answers concise unless asked to elaborate."
           }
         })
@@ -97,3 +104,4 @@ export default {
     } catch { return json("Voice service unavailable", 502, cors); }
   }
 };
+

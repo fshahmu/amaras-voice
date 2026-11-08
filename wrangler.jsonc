@@ -7,13 +7,18 @@
   },
   "previews": {
     "vars": {
-      "ALLOWED_ORIGIN": "https://morning-morning-e46b.khb8dzmv5v.workers.dev"
+      "ALLOWED_ORIGIN": "https://morning-morning-e46b.khb8dzmv5v.workers.dev",
+      "CF_ACCESS_TEAM_DOMAIN": "morning-haze-bc4c.cloudflareaccess.com",
+      "CF_ACCESS_AUD": "2dcd7a71a68c493239c331fe74cec4b17704f90a4b5ead4823e48ba550009aef"
     },
     "ratelimits": [
       {
         "name": "AMARA_RATE_LIMITER",
         "namespace_id": "1002",
-        "simple": { "limit": 5, "period": 60 }
+        "simple": {
+          "limit": 5,
+          "period": 60
+        }
       }
     ]
   },
@@ -26,6 +31,10 @@
         "period": 60
       }
     }
-  ]
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
 }
-
