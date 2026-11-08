@@ -1,70 +1,91 @@
+// Amara voice backend — staged for review, not deployed.
+// Cloudflare Access must protect this Worker before enabling paid sessions.
+// Access JWT verification below is defense in depth, not a replacement for Access policy.
+const json = (message, status, headers = {}) =>
+  new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...headers }
+  });
+
+function base64urlToBytes(value) {
+  const b64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const decoded = atob(b64 + "=".repeat((4 - b64.length % 4) % 4));
+  return Uint8Array.from(decoded, c => c.charCodeAt(0));
+}
+
+async function verifyAccessJWT(token, teamDomain, audience) {
+  if (!token || !teamDomain || !audience) return false;
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const header = JSON.parse(new TextDecoder().decode(base64urlToBytes(parts[0])));
+    const claims = JSON.parse(new TextDecoder().decode(base64urlToBytes(parts[1])));
+    const domain = new URL("https://" + teamDomain).hostname;
+    if (domain !== teamDomain || header.alg !== "RS256" || !header.kid) return false;
+    const now = Math.floor(Date.now() / 1000);
+    if (claims.iss !== `https://${teamDomain}` ||
+        !Array.isArray(claims.aud) || !claims.aud.includes(audience) ||
+        !Number.isFinite(claims.exp) || claims.exp <= now ||
+        !Number.isFinite(claims.iat) || claims.iat > now + 60 ||
+        (claims.nbf !== undefined && claims.nbf > now)) return false;
+    const keysResponse = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`);
+    if (!keysResponse.ok) return false;
+    const { keys } = await keysResponse.json();
+    const jwk = keys?.find(k => k.kid === header.kid && k.kty === "RSA" &&
+      (!k.alg || k.alg === "RS256") && (!k.use || k.use === "sig"));
+    if (!jwk) return false;
+    const key = await crypto.subtle.importKey("jwk", jwk,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+    return await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key,
+      base64urlToBytes(parts[2]), new TextEncoder().encode(parts[0] + "." + parts[1]));
+  } catch { return false; }
+}
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-
-    if (url.pathname === "/") {
-      return new Response("Amara voice service is ready.");
-    }
-
-    if (url.pathname !== "/session" || request.method !== "POST") {
-      return new Response("Not found", { status: 404 });
-    }
-
+    if (url.pathname === "/") return new Response("Amara voice service is ready.");
+    if (url.pathname !== "/session") return json("Not found", 404);
     const origin = request.headers.get("Origin");
-
-    if (!env.ALLOWED_ORIGIN || origin !== env.ALLOWED_ORIGIN) {
-      return new Response("Forbidden", { status: 403 });
-    }
-
-    if (!env.OPENAI_API_KEY || !env.SESSION_ACCESS_TOKEN) {
-      return new Response("Service not configured", { status: 503 });
-    }
-
-    const authorization = request.headers.get("Authorization");
-
-    if (authorization !== `Bearer ${env.SESSION_ACCESS_TOKEN}`) {
-      return new Response("Unauthorized", { status: 401 });
-    }
-
+    const allowed = !!env.ALLOWED_ORIGIN && origin === env.ALLOWED_ORIGIN;
+    const cors = allowed ? {
+      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Credentials": "true",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Vary": "Origin"
+    } : {};
+    if (!allowed) return json("Forbidden", 403);
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    if (request.method !== "POST") return json("Method not allowed", 405, cors);
+    if (!env.OPENAI_API_KEY || !env.CF_ACCESS_AUD || !env.CF_ACCESS_TEAM_DOMAIN)
+      return json("Service not configured", 503, cors);
+    // Only accept Access's trusted edge-injected assertion, never a browser-supplied bearer secret.
+    const verified = await verifyAccessJWT(
+      request.headers.get("Cf-Access-Jwt-Assertion"),
+      env.CF_ACCESS_TEAM_DOMAIN, env.CF_ACCESS_AUD);
+    if (!verified) return json("Unauthorized", 401, cors);
     try {
-      const response = await fetch(
-        "https://api.openai.com/v1/realtime/client_secrets",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            session: {
-              type: "realtime",
-              model: "gpt-realtime",
-              audio: {
-                output: {
-                  voice: "shimmer"
-                }
-              },
-              instructions:
-                "You are Amara, a warm, thoughtful AI voice companion. Speak naturally and respond conversationally."
-            }
-          })
-        }
-      );
-
-      return new Response(await response.text(), {
-        status: response.status,
+      const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
+        method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-          "Access-Control-Allow-Origin": origin,
-          "Vary": "Origin"
-        }
+          "Authorization": `Bearer ${env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          session: {
+            type: "realtime",
+            model: "gpt-realtime",
+            audio: { output: { voice: "shimmer" } },
+            instructions: "You are Amara, a warm, thoughtful AI voice companion. Speak naturally, gently and conversationally. Keep answers concise unless asked to elaborate."
+          }
+        })
       });
-    } catch {
-      return new Response("Voice service unavailable", {
-        status: 502
+      if (!response.ok) return json("Unable to start voice session", 502, cors);
+      return new Response(await response.text(), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...cors }
       });
-    }
+    } catch { return json("Voice service unavailable", 502, cors); }
   }
 };
