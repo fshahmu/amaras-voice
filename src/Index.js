@@ -58,13 +58,18 @@ export default {
     if (!allowed) return json("Forbidden", 403);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     if (request.method !== "POST") return json("Method not allowed", 405, cors);
-    if (!env.OPENAI_API_KEY || !env.CF_ACCESS_AUD || !env.CF_ACCESS_TEAM_DOMAIN)
+    if (!env.OPENAI_API_KEY || !env.CF_ACCESS_AUD || !env.CF_ACCESS_TEAM_DOMAIN || !env.AMARA_RATE_LIMITER)
       return json("Service not configured", 503, cors);
     // Only accept Access's trusted edge-injected assertion, never a browser-supplied bearer secret.
     const verified = await verifyAccessJWT(
       request.headers.get("Cf-Access-Jwt-Assertion"),
       env.CF_ACCESS_TEAM_DOMAIN, env.CF_ACCESS_AUD);
     if (!verified) return json("Unauthorized", 401, cors);
+    // Rate limit before any paid OpenAI session is created.
+    try {
+      const limiter = await env.AMARA_RATE_LIMITER.limit({ key: "voice-sessions" });
+      if (!limiter.success) return json("Too many sessions", 429, cors);
+    } catch { return json("Session protection unavailable", 503, cors); }
     try {
       const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
         method: "POST",
@@ -82,7 +87,9 @@ export default {
         })
       });
       if (!response.ok) return json("Unable to start voice session", 502, cors);
-      return new Response(await response.text(), {
+      const credential = await response.json();
+      if (typeof credential.value !== "string" || !credential.value) return json("Invalid voice credential", 502, cors);
+      return new Response(JSON.stringify({ client_secret: { value: credential.value } }), {
         status: 200,
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...cors }
       });
