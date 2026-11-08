@@ -36,8 +36,9 @@ async function verifyAccessJWT(token, teamDomain, audience) {
     if (!jwk) return false;
     const key = await crypto.subtle.importKey("jwk", jwk,
       { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
-    return await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key,
+    const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key,
       base64urlToBytes(parts[2]), new TextEncoder().encode(parts[0] + "." + parts[1]));
+    return valid && typeof claims.sub === "string" && claims.sub ? claims.sub : false;
   } catch { return false; }
 }
 
@@ -61,13 +62,13 @@ export default {
     if (!env.OPENAI_API_KEY || !env.CF_ACCESS_AUD || !env.CF_ACCESS_TEAM_DOMAIN || !env.AMARA_RATE_LIMITER)
       return json("Service not configured", 503, cors);
     // Only accept Access's trusted edge-injected assertion, never a browser-supplied bearer secret.
-    const verified = await verifyAccessJWT(
+    const identity = await verifyAccessJWT(
       request.headers.get("Cf-Access-Jwt-Assertion"),
       env.CF_ACCESS_TEAM_DOMAIN, env.CF_ACCESS_AUD);
-    if (!verified) return json("Unauthorized", 401, cors);
+    if (!identity) return json("Unauthorized", 401, cors);
     // Rate limit before any paid OpenAI session is created.
     try {
-      const limiter = await env.AMARA_RATE_LIMITER.limit({ key: "voice-sessions" });
+      const limiter = await env.AMARA_RATE_LIMITER.limit({ key: identity });
       if (!limiter.success) return json("Too many sessions", 429, cors);
     } catch { return json("Session protection unavailable", 503, cors); }
     try {
