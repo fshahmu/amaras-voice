@@ -3,6 +3,18 @@
   "main": "src/Index.js",
   "compatibility_date": "2026-11-07",
   "vars": {
-    "ALLOWED_ORIGIN": "https://morning-morning-e46b.khb8dzmv5v.workers.dev"
-  }
+    "ALLOWED_ORIGIN": "https://morning-morning-e46b.khb8dzmv5v.workers.dev",
+    "CF_ACCESS_AUD": "2dcd7a71a68c493239c331fe74cec4b17704f90a4b5ead4823e48ba550009aef",
+    "CF_ACCESS_TEAM_DOMAIN": "morning-haze-bc4c.cloudflareaccess.com"
+  },
+  "ratelimits": [
+    {
+      "name": "AMARA_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
+    }
+  ]
 }
