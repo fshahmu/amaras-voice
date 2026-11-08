@@ -1,0 +1,12 @@
+{
+  "name": "amara-voice-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
+    "dev": "wrangler dev --local"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
