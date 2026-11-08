@@ -3,10 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "npm run check",
     "check": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
     "dev": "wrangler dev --local"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "wrangler": "4.158.0"
   }
 }
+
