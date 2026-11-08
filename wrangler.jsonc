@@ -1,7 +1,6 @@
-
 {
   "name": "amaras-voice",
-  "main": "src/index.js",
+  "main": "src/Index.js",
   "compatibility_date": "2026-11-07",
   "vars": {
     "ALLOWED_ORIGIN": "https://morning-morning-e46b.khb8dzmv5v.workers.dev"
